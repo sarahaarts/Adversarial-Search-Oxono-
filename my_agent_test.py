@@ -4,7 +4,7 @@ import time
 from agent import Agent
 from oxono import Game
 
-class MyAgent(Agent):
+class MyAgentTest(Agent):
     def __init__(self, player):
         super().__init__(player)
         self.cache = {} 
