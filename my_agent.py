@@ -1,170 +1,197 @@
+from agent import Agent
+from oxono import Game
 import math
 import random
 import time
-from agent import Agent
-from oxono import Game
 
 class MyAgent(Agent):
     def __init__(self, player):
         super().__init__(player)
-        self.cache = {} 
+        self.max_depth = 3
+        self.cache = {}
         self.start_cpu_time = 0
         self.time_limit = 0
 
     def act(self, state, remaining_time):
+        self.cache = {}
         legal_actions = Game.actions(state)
-        if not legal_actions: return None
+        if not legal_actions:
+            return None
 
         self.start_cpu_time = time.time()
-        
-        total_pieces = 32 - (sum(state.pieces_x) + sum(state.pieces_o))
-        my_turns_left = max(1, (32 - total_pieces) // 2)
-        
-        safe_remaining_time = remaining_time - 50 
-        base_time = max(0.5, safe_remaining_time / my_turns_left)
-
-        if total_pieces < 8:
-            self.time_limit = base_time * 0.7
-        elif total_pieces < 24:
-            self.time_limit = base_time * 1.3 
-        else:
-            self.time_limit = base_time * 0.8 
-
-        self.time_limit = min(self.time_limit, 15.0)
-
+        self.time_limit = remaining_time * 0.03
         best_move_so_far = legal_actions[0]
-        last_score = 0
-
-        for current_depth in range(1, 25):
+        
+        for current_depth in range(1, 10):
             try:
                 score, move = self.max_value(state, current_depth, -math.inf, math.inf)
                 if move:
                     best_move_so_far = move
-                    last_score = score
-                
-                if abs(score) >= 1000: break 
-                
-                if current_depth >= 6 and (time.time() - self.start_cpu_time) > (self.time_limit * 0.5):
+                if score >= 1000:
                     break
-
             except TimeoutError:
+                print(f"[IA] Temps limite atteint. Rendu de la profondeur {current_depth-1}")
                 break
-        
+
+            if (time.time() - self.start_cpu_time) > self.time_limit:
+                break
+            
         return best_move_so_far
-
-    def _get_state_hash(self, state):
-        return hash((str(state.board), state.totem_O, state.totem_X, state.current_player))
     
-    def max_value(self, state, depth, alpha, beta):
-        if (time.time() - self.start_cpu_time) > self.time_limit: raise TimeoutError
-        
-        state_hash = self._get_state_hash(state)
-        if state_hash in self.cache:
-            val, d = self.cache[state_hash]
-            if d >= depth: return val, None
 
+    def max_value(self, state, depth, alpha, beta):
+        if (time.time() - self.start_cpu_time) > self.time_limit:
+            raise TimeoutError
+        
         if depth == 0 or Game.is_terminal(state):
             return self.evaluate(state), None
         
         v = -math.inf
         best_move = None
-        for action in self._sort_actions(state, Game.actions(state), True):
+
+        sorted_actions = self._sort_actions(state, Game.actions(state), True)
+        for action in sorted_actions:
             new_state = state.copy()
             Game.apply(new_state, action)
-            v2, _ = (self.max_value(new_state, depth-1, alpha, beta) if Game.to_move(new_state) == self.player 
-                     else self.min_value(new_state, depth-1, alpha, beta))
+
+            # si adversaire n'a plus de pièces
+            if Game.to_move(new_state) == self.player:
+                v2, _ = self.max_value(new_state, depth - 1, alpha, beta)
+            else:
+                v2, _ = self.min_value(new_state, depth - 1, alpha, beta)
+
             if v2 > v:
-                v, best_move = v2, action
+                v = v2
+                best_move = action
                 alpha = max(alpha, v)
-            if v >= beta: break
-        
-        self.cache[state_hash] = (v, depth)
+
+            if v >= beta:
+                return v, best_move
+            
         return v, best_move
-
+    
     def min_value(self, state, depth, alpha, beta):
-        if (time.time() - self.start_cpu_time) > self.time_limit: raise TimeoutError
+        if (time.time() - self.start_cpu_time) > self.time_limit:
+            raise TimeoutError
         
-        state_hash = self._get_state_hash(state)
-        if state_hash in self.cache:
-            val, d = self.cache[state_hash]
-            if d >= depth: return val, None
-
         if depth == 0 or Game.is_terminal(state):
             return self.evaluate(state), None
         
         v = math.inf
         best_move = None
-        for action in self._sort_actions(state, Game.actions(state), False):
+
+        sorted_actions = self._sort_actions(state, Game.actions(state), False)
+        for action in sorted_actions:
             new_state = state.copy()
             Game.apply(new_state, action)
-            v2, _ = (self.max_value(new_state, depth-1, alpha, beta) if Game.to_move(new_state) == self.player 
-                     else self.min_value(new_state, depth-1, alpha, beta))
+            
+            if Game.to_move(new_state) == self.player:
+                v2, _ = self.max_value(new_state, depth - 1, alpha, beta)
+            else:
+                v2, _ = self.min_value(new_state, depth - 1, alpha, beta)
+            
             if v2 < v:
-                v, best_move = v2, action
+                v = v2
+                best_move = action
                 beta = min(beta, v)
-            if v <= alpha: break
+            
+            if v <= alpha:
+                return v, best_move
                 
-        self.cache[state_hash] = (v, depth)
         return v, best_move
-
+    
     def _sort_actions(self, state, actions, maximizing_player):
-        def quick_score(a):
-            r, c = a[2][0], a[2][1]
-            score = 0
-            if r in [2, 3] and c in [2, 3]: score = 10
-            elif r in [1, 4] and c in [1, 4]: score = 5
-            return score
-        return sorted(actions, key=quick_score, reverse=maximizing_player)
+        actions_copy = list(actions)
+        random.shuffle(actions_copy)
+
+        def quick_score(action):
+            pos = action[1] 
+            r, c = pos[0], pos[1]
+
+            if r in [2, 3] and c in [2, 3]: return 10
+            if r in [1, 4] and c in [1, 4]: return 5
+            return 0
+
+        actions_copy.sort(key=quick_score, reverse=maximizing_player)
+
+        return actions_copy
+    
 
     def evaluate(self, state):
-        state_hash = self._get_state_hash(state)
+        state_hash = str(state.board)
         if state_hash in self.cache:
-            val, d = self.cache[state_hash]
-            return val
-            
+            return self.cache[state_hash]
+ 
         if Game.is_terminal(state):
-            u = Game.utility(state, self.player)
-            return 2000 if u == 1 else (-2000 if u == -1 else 0)
+            utility = Game.utility(state, self.player)
+            if utility == 1:
+                return 1000
+            elif utility == -1:
+                return -1000
+            else:
+                return 0 
                 
         score = 0
         board = state.board
- 
+
+        for r in range(6):
+            for c in range(6):
+                if board[r][c] is not None:
+                    # Si c'est notre pièce
+                    if board[r][c][1] == self.player:
+                        # Bonus si on est dans les colonnes/lignes centrales (2 ou 3)
+                        if r in [2, 3] and c in [2, 3]: score += 5
+                        elif r in [1, 4] and c in [1, 4]: score += 2
+
         for i in range(6):
             row = board[i]
             col = [board[j][i] for j in range(6)]
+            
             for j in range(3):
-                score += self._score_window(row[j:j+4])
-                score += self._score_window(col[j:j+4])
+                window_row = row[j:j+4]
+                window_col = col[j:j+4]
+                
+                score += self._score_window(window_row)
+                score += self._score_window(window_col)
 
-        tr, tc = state.totem_O if self.player == 0 else state.totem_X
-        if tr in [0, 5] or tc in [0, 5]: score -= 15
-        
+        self.cache[state_hash] = score
         return score
     
     def _score_window(self, window):
-        pieces = [c for c in window if c is not None]
-        if not pieces: return 0
+        score = 0
         
-        my_p = [p for p in pieces if p[1] == self.player]
-        opp_p = [p for p in pieces if p[1] != self.player]
+        pieces = [cell for cell in window if cell is not None]
+        empty_count = 4 - len(pieces)
         
-        m_c = len(my_p)
-        o_c = len(opp_p)
+        if empty_count == 4:
+            return 0
+            
+        colors = [cell[1] for cell in pieces]
+        symbols = [cell[0] for cell in pieces]
 
-        if o_c > 0 and m_c == 0:
-            if o_c == 3: return -250
-            if o_c == 2: return -50
-            if o_c == 1: return -5
+        my_color_count = colors.count(self.player)
+        opp_color_count = colors.count(1 - self.player)
+        
+        # uniquement nous
+        if my_color_count > 0 and opp_color_count == 0:
+            if my_color_count == 3:
+                score += 50
+            elif my_color_count == 2:
+                score += 10 
 
-        if m_c > 0 and o_c == 0:
-            if m_c == 3: return 150
-            if m_c == 2: return 40
-            if m_c == 1: return 10
+        # uniquement adversaire
+        elif opp_color_count > 0 and my_color_count == 0:
+            if opp_color_count == 3:
+                score -= 60
+            elif opp_color_count == 2:
+                score -= 12
 
-        symbols = [p[0] for p in pieces]
-        for s in ['x', 'o']:
-            s_c = symbols.count(s)
-            if s_c == 3 and len(pieces) == 3:
-                return 70
-                
-        return 0
+        x_count = symbols.count('x')
+        o_count = symbols.count('o')
+        
+        if x_count == 3 and o_count == 0:
+            score += 20 
+        elif o_count == 3 and x_count == 0:
+            score += 20
+
+        return score
