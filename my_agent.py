@@ -9,20 +9,27 @@ class MyAgent(Agent):
         super().__init__(player)
         self.max_depth = 3
         self.cache = {}
+        self.eval_cache = {}
         self.start_cpu_time = 0
         self.time_limit = 0
 
     def act(self, state, remaining_time):
-        self.cache = {}
         legal_actions = Game.actions(state)
         if not legal_actions:
             return None
 
         self.start_cpu_time = time.time()
-        self.time_limit = remaining_time * 0.03
-        best_move_so_far = legal_actions[0]
+
+        empty_cells = sum(1 for r in range(6) for c in range(6) if state.board[r][c] is None)
+        estimated_moves_left = max(4.0, empty_cells / 2.0)
+        ideal_time = remaining_time / estimated_moves_left
+  
+        self.time_limit = max(0.1, min(ideal_time, remaining_time * 0.15) - 0.05)
         
-        for current_depth in range(1, 10):
+        sorted_initial_actions = self._sort_actions(state, legal_actions, True)
+        best_move_so_far = sorted_initial_actions[0]
+        
+        for current_depth in range(1, 20):
             try:
                 score, move = self.max_value(state, current_depth, -math.inf, math.inf)
                 if move:
@@ -30,7 +37,7 @@ class MyAgent(Agent):
                 if score >= 1000:
                     break
             except TimeoutError:
-                print(f"[IA] Temps limite atteint. Rendu de la profondeur {current_depth-1}")
+                #print(f"[IA] Temps limite atteint. Rendu de la profondeur {current_depth-1}")
                 break
 
             if (time.time() - self.start_cpu_time) > self.time_limit:
@@ -46,10 +53,33 @@ class MyAgent(Agent):
         if depth == 0 or Game.is_terminal(state):
             return self.evaluate(state), None
         
+        state_hash = str(state.board)
+
+        if state_hash in self.cache:
+            cached_depth, cached_score, flag, cached_move = self.cache[state_hash]
+
+            if cached_depth >= depth:
+                if flag == 'EXACT':
+                    return cached_score, cached_move
+                elif flag == 'LOWERBOUND':
+                    alpha = max(alpha, cached_score)
+                elif flag == 'UPPERBOUND':
+                    beta = min(beta, cached_score)
+                
+                if alpha >= beta:
+                    return cached_score, cached_move
+
+        original_alpha = alpha
+        
         v = -math.inf
         best_move = None
 
-        sorted_actions = self._sort_actions(state, Game.actions(state), True)
+        cached_move = None
+        if state_hash in self.cache:
+            cached_move = self.cache[state_hash][3]
+
+        sorted_actions = self._sort_actions(state, Game.actions(state), True, priority_move=cached_move)
+        
         for action in sorted_actions:
             new_state = state.copy()
             Game.apply(new_state, action)
@@ -66,8 +96,17 @@ class MyAgent(Agent):
                 alpha = max(alpha, v)
 
             if v >= beta:
-                return v, best_move
+                break
             
+        if v <= original_alpha:
+            flag = 'UPPERBOUND'
+        elif v >= beta:
+            flag = 'LOWERBOUND'
+        else:
+            flag = 'EXACT'
+            
+        self.cache[state_hash] = (depth, v, flag, best_move)
+
         return v, best_move
     
     def min_value(self, state, depth, alpha, beta):
@@ -77,10 +116,33 @@ class MyAgent(Agent):
         if depth == 0 or Game.is_terminal(state):
             return self.evaluate(state), None
         
+        state_hash = str(state.board)
+
+        if state_hash in self.cache:
+            cached_depth, cached_score, flag, cached_move = self.cache[state_hash]
+
+            if cached_depth >= depth:
+                if flag == 'EXACT':
+                    return cached_score, cached_move
+                elif flag == 'LOWERBOUND':
+                    alpha = max(alpha, cached_score)
+                elif flag == 'UPPERBOUND':
+                    beta = min(beta, cached_score)
+                
+                if alpha >= beta:
+                    return cached_score, cached_move
+
+        original_beta = beta 
+        
         v = math.inf
         best_move = None
 
-        sorted_actions = self._sort_actions(state, Game.actions(state), False)
+        cached_move = None
+        if state_hash in self.cache:
+            cached_move = self.cache[state_hash][3]
+
+        sorted_actions = self._sort_actions(state, Game.actions(state), False, priority_move=cached_move)
+
         for action in sorted_actions:
             new_state = state.copy()
             Game.apply(new_state, action)
@@ -96,31 +158,43 @@ class MyAgent(Agent):
                 beta = min(beta, v)
             
             if v <= alpha:
-                return v, best_move
+                break 
                 
+        if v <= alpha: 
+            flag = 'UPPERBOUND'
+        elif v >= original_beta:
+            flag = 'LOWERBOUND'
+        else:
+            flag = 'EXACT'
+            
+        self.cache[state_hash] = (depth, v, flag, best_move)
+
         return v, best_move
     
-    def _sort_actions(self, state, actions, maximizing_player):
+    def _sort_actions(self, state, actions, maximizing_player, priority_move=None):
         actions_copy = list(actions)
         random.shuffle(actions_copy)
 
         def quick_score(action):
             pos = action[1] 
             r, c = pos[0], pos[1]
-
             if r in [2, 3] and c in [2, 3]: return 10
             if r in [1, 4] and c in [1, 4]: return 5
             return 0
 
         actions_copy.sort(key=quick_score, reverse=maximizing_player)
 
+        if priority_move is not None and priority_move in actions_copy:
+            actions_copy.remove(priority_move)
+            actions_copy.insert(0, priority_move)
+
         return actions_copy
     
 
     def evaluate(self, state):
         state_hash = str(state.board)
-        if state_hash in self.cache:
-            return self.cache[state_hash]
+        if state_hash in self.eval_cache:
+            return self.eval_cache[state_hash]
  
         if Game.is_terminal(state):
             utility = Game.utility(state, self.player)
@@ -154,7 +228,14 @@ class MyAgent(Agent):
                 score += self._score_window(window_row)
                 score += self._score_window(window_col)
 
-        self.cache[state_hash] = score
+        for r in range(3):
+            for c in range(3):
+                window_diag1 = [board[r+i][c+i] for i in range(4)]
+                window_diag2 = [board[r+3-i][c+i] for i in range(4)]
+                score += self._score_window(window_diag1)
+                score += self._score_window(window_diag2)
+
+        self.eval_cache[state_hash] = score
         return score
     
     def _score_window(self, window):
