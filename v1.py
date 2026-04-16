@@ -2,11 +2,10 @@ from agent import Agent
 from oxono import Game
 import math
 import random
+random.seed(0)
 import time
 
-# 100% tests
-
-class MyAgent(Agent):
+class V1(Agent):
     def __init__(self, player):
         super().__init__(player)
         self.max_depth = 3
