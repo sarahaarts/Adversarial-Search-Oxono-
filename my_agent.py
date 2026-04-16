@@ -4,12 +4,14 @@ import math
 import random
 import time
 
+# 100% tests
+
 class MyAgent(Agent):
     def __init__(self, player):
         super().__init__(player)
         self.max_depth = 3
-        self.cache = {}
-        self.eval_cache = {}
+        self.pv_cache = {}
+        self.eval_cache = {} 
         self.start_cpu_time = 0
         self.time_limit = 0
 
@@ -23,9 +25,8 @@ class MyAgent(Agent):
         empty_cells = sum(1 for r in range(6) for c in range(6) if state.board[r][c] is None)
         estimated_moves_left = max(4.0, empty_cells / 2.0)
         ideal_time = remaining_time / estimated_moves_left
-  
-        self.time_limit = max(0.1, min(ideal_time, remaining_time * 0.15) - 0.05)
-        
+        self.time_limit = max(0.2, min(ideal_time, remaining_time * 0.15) - 0.05)
+
         sorted_initial_actions = self._sort_actions(state, legal_actions, True)
         best_move_so_far = sorted_initial_actions[0]
         
@@ -34,10 +35,9 @@ class MyAgent(Agent):
                 score, move = self.max_value(state, current_depth, -math.inf, math.inf)
                 if move:
                     best_move_so_far = move
-                if score >= 1000:
+                if score >= 1000: 
                     break
             except TimeoutError:
-                #print(f"[IA] Temps limite atteint. Rendu de la profondeur {current_depth-1}")
                 break
 
             if (time.time() - self.start_cpu_time) > self.time_limit:
@@ -54,37 +54,17 @@ class MyAgent(Agent):
             return self.evaluate(state), None
         
         state_hash = str(state.board)
+        cached_move = self.pv_cache.get(state_hash)
 
-        if state_hash in self.cache:
-            cached_depth, cached_score, flag, cached_move = self.cache[state_hash]
-
-            if cached_depth >= depth:
-                if flag == 'EXACT':
-                    return cached_score, cached_move
-                elif flag == 'LOWERBOUND':
-                    alpha = max(alpha, cached_score)
-                elif flag == 'UPPERBOUND':
-                    beta = min(beta, cached_score)
-                
-                if alpha >= beta:
-                    return cached_score, cached_move
-
-        original_alpha = alpha
+        sorted_actions = self._sort_actions(state, Game.actions(state), True, priority_move=cached_move)
         
         v = -math.inf
         best_move = None
-
-        cached_move = None
-        if state_hash in self.cache:
-            cached_move = self.cache[state_hash][3]
-
-        sorted_actions = self._sort_actions(state, Game.actions(state), True, priority_move=cached_move)
         
         for action in sorted_actions:
             new_state = state.copy()
             Game.apply(new_state, action)
 
-            # si adversaire n'a plus de pièces
             if Game.to_move(new_state) == self.player:
                 v2, _ = self.max_value(new_state, depth - 1, alpha, beta)
             else:
@@ -98,15 +78,7 @@ class MyAgent(Agent):
             if v >= beta:
                 break
             
-        if v <= original_alpha:
-            flag = 'UPPERBOUND'
-        elif v >= beta:
-            flag = 'LOWERBOUND'
-        else:
-            flag = 'EXACT'
-            
-        self.cache[state_hash] = (depth, v, flag, best_move)
-
+        self.pv_cache[state_hash] = best_move
         return v, best_move
     
     def min_value(self, state, depth, alpha, beta):
@@ -117,32 +89,13 @@ class MyAgent(Agent):
             return self.evaluate(state), None
         
         state_hash = str(state.board)
-
-        if state_hash in self.cache:
-            cached_depth, cached_score, flag, cached_move = self.cache[state_hash]
-
-            if cached_depth >= depth:
-                if flag == 'EXACT':
-                    return cached_score, cached_move
-                elif flag == 'LOWERBOUND':
-                    alpha = max(alpha, cached_score)
-                elif flag == 'UPPERBOUND':
-                    beta = min(beta, cached_score)
-                
-                if alpha >= beta:
-                    return cached_score, cached_move
-
-        original_beta = beta 
-        
-        v = math.inf
-        best_move = None
-
-        cached_move = None
-        if state_hash in self.cache:
-            cached_move = self.cache[state_hash][3]
+        cached_move = self.pv_cache.get(state_hash)
 
         sorted_actions = self._sort_actions(state, Game.actions(state), False, priority_move=cached_move)
 
+        v = math.inf
+        best_move = None
+        
         for action in sorted_actions:
             new_state = state.copy()
             Game.apply(new_state, action)
@@ -160,15 +113,7 @@ class MyAgent(Agent):
             if v <= alpha:
                 break 
                 
-        if v <= alpha: 
-            flag = 'UPPERBOUND'
-        elif v >= original_beta:
-            flag = 'LOWERBOUND'
-        else:
-            flag = 'EXACT'
-            
-        self.cache[state_hash] = (depth, v, flag, best_move)
-
+        self.pv_cache[state_hash] = best_move
         return v, best_move
     
     def _sort_actions(self, state, actions, maximizing_player, priority_move=None):
@@ -181,8 +126,8 @@ class MyAgent(Agent):
             if r in [2, 3] and c in [2, 3]: return 10
             if r in [1, 4] and c in [1, 4]: return 5
             return 0
-
-        actions_copy.sort(key=quick_score, reverse=maximizing_player)
+        
+        actions_copy.sort(key=quick_score, reverse=True)
 
         if priority_move is not None and priority_move in actions_copy:
             actions_copy.remove(priority_move)
@@ -211,25 +156,21 @@ class MyAgent(Agent):
         for r in range(6):
             for c in range(6):
                 if board[r][c] is not None:
-                    # Si c'est notre pièce
                     if board[r][c][1] == self.player:
-                        # Bonus si on est dans les colonnes/lignes centrales (2 ou 3)
                         if r in [2, 3] and c in [2, 3]: score += 5
                         elif r in [1, 4] and c in [1, 4]: score += 2
 
         for i in range(6):
             row = board[i]
             col = [board[j][i] for j in range(6)]
-            
             for j in range(3):
                 window_row = row[j:j+4]
                 window_col = col[j:j+4]
-                
                 score += self._score_window(window_row)
                 score += self._score_window(window_col)
 
         for r in range(3):
-            for c in range(3):
+            for c in range(3): 
                 window_diag1 = [board[r+i][c+i] for i in range(4)]
                 window_diag2 = [board[r+3-i][c+i] for i in range(4)]
                 score += self._score_window(window_diag1)
@@ -240,7 +181,6 @@ class MyAgent(Agent):
     
     def _score_window(self, window):
         score = 0
-        
         pieces = [cell for cell in window if cell is not None]
         empty_count = 4 - len(pieces)
         
@@ -253,26 +193,18 @@ class MyAgent(Agent):
         my_color_count = colors.count(self.player)
         opp_color_count = colors.count(1 - self.player)
         
-        # uniquement nous
         if my_color_count > 0 and opp_color_count == 0:
-            if my_color_count == 3:
-                score += 50
-            elif my_color_count == 2:
-                score += 10 
+            if my_color_count == 3: score += 50
+            elif my_color_count == 2: score += 10 
 
-        # uniquement adversaire
         elif opp_color_count > 0 and my_color_count == 0:
-            if opp_color_count == 3:
-                score -= 60
-            elif opp_color_count == 2:
-                score -= 12
+            if opp_color_count == 3: score -= 60
+            elif opp_color_count == 2: score -= 12
 
         x_count = symbols.count('x')
         o_count = symbols.count('o')
         
-        if x_count == 3 and o_count == 0:
-            score += 20 
-        elif o_count == 3 and x_count == 0:
-            score += 20
+        if x_count == 3 and o_count == 0: score += 20 
+        elif o_count == 3 and x_count == 0: score += 20
 
         return score
