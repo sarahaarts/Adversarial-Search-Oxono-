@@ -4,8 +4,6 @@ import math
 import random
 import time
 
-# 100% tests
-
 class MyAgent(Agent):
     def __init__(self, player):
         super().__init__(player)
